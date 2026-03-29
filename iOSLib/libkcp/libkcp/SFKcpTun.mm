@@ -19,6 +19,25 @@
 #include <ifaddrs.h>
 UDPSession *sess;
 #define ENABLE_NETWORKFRAMEWORK 0
+
+static void dump_prefix(const char *tag, const uint8_t *text, size_t len, size_t maxLen) {
+    printf("%s (%zu):\n", tag, len);
+    size_t limit = len < maxLen ? len : maxLen;
+    for (size_t i = 0; i < limit; i++) {
+        if ((i % 16) == 0 && i != 0) {
+            printf("\n");
+        }
+        if ((i % 4) == 0 && ((i % 16) != 0)) {
+            printf(" ");
+        }
+        printf("%02x", text[i]);
+    }
+    if (limit < len) {
+        printf(" ...");
+    }
+    printf("\n");
+}
+
 void
 itimeofday(long *sec, long *usec) {
     struct timeval time;
@@ -231,6 +250,7 @@ IUINT32 iclock() {
         char *ptr = (char *)data.bytes;
 
         if  (strongSelf.connected) {
+            dump_prefix("SFKcpTun input", (const uint8_t *)data.bytes, data.length, 64);
             dispatch_suspend(strongSelf->queue);
             while (sended < tosend) {
                 
