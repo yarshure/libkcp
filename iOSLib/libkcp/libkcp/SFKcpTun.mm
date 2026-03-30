@@ -18,6 +18,25 @@
 
 #include <ifaddrs.h>
 UDPSession *sess;
+#define ENABLE_NETWORKFRAMEWORK 0
+
+static void dump_prefix(const char *tag, const uint8_t *text, size_t len, size_t maxLen) {
+    printf("%s (%zu):\n", tag, len);
+    size_t limit = len < maxLen ? len : maxLen;
+    for (size_t i = 0; i < limit; i++) {
+        if ((i % 16) == 0 && i != 0) {
+            printf("\n");
+        }
+        if ((i % 4) == 0 && ((i % 16) != 0)) {
+            printf(" ");
+        }
+        printf("%02x", text[i]);
+    }
+    if (limit < len) {
+        printf(" ...");
+    }
+    printf("\n");
+}
 
 void
 itimeofday(long *sec, long *usec) {
@@ -89,29 +108,34 @@ IUINT32 iclock() {
 -(void)startWith:(tunConnected)connectd recv:(didRecvdata)recv disConnect:(tunConnected)disConnect
     {
         __weak  SFKcpTun *weakSelf = self;
+        self.tunConnected = connectd;
         if ( self.connected )  {
             dispatch_async(self.dispatchqueue, ^{
                 weakSelf.tunConnected(weakSelf);
             });
+            //self.tunConnected(self);
         }
         
         //self.tunConnected = connectd;
         self.recvData = recv;
         self.disConnected = disConnect;
 
-        if (__builtin_available(iOS 12, macOS 10.14,*)) {
-            sess->start_send_receive_loop(^(char *buffer, size_t len) {
-                NSData *d = [NSData dataWithBytes:buffer length:len];
-                
-                dispatch_async(self.dispatchqueue, ^{
-                    weakSelf.recvData(weakSelf, d);
-                    
-                });
-                
-            });
+        if (ENABLE_NETWORKFRAMEWORK){
+            if (__builtin_available(iOS 12, macOS 10.14,*) ) {
+                       sess->start_send_receive_loop(^(char *buffer, size_t len) {
+                           NSData *d = [NSData dataWithBytes:buffer length:len];
+                           
+                           dispatch_async(weakSelf.dispatchqueue, ^{
+                               weakSelf.recvData(weakSelf, d);
+                               
+                           });
+                           
+                       });
+                   }
         }else {
-             [self checkLoop];
+            [self checkLoop];
         }
+       
     }
 -(void)restartUDPSessionWithIpaddr:(NSString*)ip port:(NSString*)port
 {
@@ -226,6 +250,7 @@ IUINT32 iclock() {
         char *ptr = (char *)data.bytes;
 
         if  (strongSelf.connected) {
+            dump_prefix("SFKcpTun input", (const uint8_t *)data.bytes, data.length, 64);
             dispatch_suspend(strongSelf->queue);
             while (sended < tosend) {
                 
@@ -235,8 +260,10 @@ IUINT32 iclock() {
                 ptr += sended;
                 //NSLog(@"KCPTun sended:%zu, totoal:= %zu",sended,tosend);
                 //不能并行接收网络数据,效率有折扣
-                if (__builtin_available(iOS 12,macOS 10.14, *)) {
-                    sess->NWUpdate(iclock());
+                if(ENABLE_NETWORKFRAMEWORK) {
+                    if (__builtin_available(iOS 12,macOS 10.14, *) && ENABLE_NETWORKFRAMEWORK) {
+                        sess->NWUpdate(iclock());
+                    }
                 }else {
                     sess->Update(iclock());
                 }

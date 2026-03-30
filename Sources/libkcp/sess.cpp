@@ -9,7 +9,7 @@
 #include <cstring>
 #include "CRC32.h"
 #include <Network/Network.h>
-#include "kcpextern.h"
+#include "libkcp.h"
 // Global Options nw
 #define AT_AVAILABLE(...) \
 _Pragma("clang diagnostic push") \
@@ -18,19 +18,16 @@ _Pragma("clang diagnostic ignored \"-Wunguarded-availability-new\"") \
 __builtin_available(__VA_ARGS__) \
 _Pragma("clang diagnostic pop")
 
-char *g_psk = NULL;            // TLS PSK
+
 char *g_local_port = NULL;    // Local port flag
 char *g_local_addr = NULL;    // Source Address
-bool g_use_bonjour = false;    // Use Bonjour rather than hostnames
-bool g_detached = true;    // Ignore stdin
-bool g_listener = false;    // Create a listener
-bool g_use_tls = false;        // Use TLS or DTLS
+
 bool g_use_udp = true;        // Use UDP instead of TCP
 bool g_verbose = false;        // Verbose
 int g_family = AF_UNSPEC;     // Required address family
 
 dispatch_queue_t dispatchQueue = NULL;//dispatch_queue_create("nw.socket.queue",NULL);
-#define NWCAT_BONJOUR_SERVICE_TCP_TYPE "_nwcat._tcp"
+
 #define NWCAT_BONJOUR_SERVICE_UDP_TYPE "_nwcat._udp"
 #define NWCAT_BONJOUR_SERVICE_DOMAIN "local"
 #define ENABLE_NETWORKFRAMEWORK 0
@@ -129,10 +126,10 @@ UDPSession::DialWithOptions(const char *ip, const char *port, size_t dataShards,
         //
         
     }else {
-        uint16_t arrToInt = 0;
-        for(int i=0;i<=1;i++)
-            arrToInt =(arrToInt<<8) | port[i];
-        sess = UDPSession::Dial(ip, arrToInt);
+//        uint16_t arrToInt = 0;
+//        for(int i=0;i<=1;i++)
+//            arrToInt =(arrToInt<<8) | port[i];
+        sess = UDPSession::Dial(ip, (uint16_t)atoi(port));
         if (sess == nullptr) {
             return nullptr;
         }
@@ -222,10 +219,10 @@ UDPSession::Update(uint32_t current) noexcept {
     for (;;) {
         ssize_t n = recv(m_sockfd, m_buf, sizeof(m_buf), 0);
         if (n < 0) {
-            //perror("read fopen( \"null test.txt\", \"r\" )");
+            //perror("read error )");
             
-            debug_print("kcp udp socket read error");
-            //break;
+            //debug_print("kcp udp socket read error\n");
+            break;
         }
         if (n > 0) {
             dump((char*)"UDP Update", m_buf, n);
@@ -332,11 +329,14 @@ UDPSession::Destroy(UDPSession *sess) {
     if (nullptr == sess) return;
     if (0 != sess->m_sockfd) { close(sess->m_sockfd); }
     if (nullptr != sess->m_kcp) { ikcp_release(sess->m_kcp); }
-    if (AT_AVAILABLE(iOS 12,macOS 10.14, *)&& ENABLE_NETWORKFRAMEWORK) {
-        if (sess->outbound_connection != NULL){
-            nw_release(sess->outbound_connection);
+    if (ENABLE_NETWORKFRAMEWORK) {
+        if (__builtin_available(iOS 12,macOS 10.14, *)) {
+            if (sess->outbound_connection != NULL){
+                nw_release(sess->outbound_connection);
+            }
         }
     }
+    
     delete sess;
 }
 
@@ -508,23 +508,26 @@ UDPSession::out_wrapper(const char *buf, int len, struct IKCPCB *, void *user) {
 ssize_t
 UDPSession::output(const void *buffer, size_t length) {
     dump((char*)"UDPSession write socket", (byte *)buffer, length);
-    if (AT_AVAILABLE(iOS 12,macOS 10.14, *)&& ENABLE_NETWORKFRAMEWORK) {
-        //send error check
-        dispatch_data_t data =  dispatch_data_create(buffer,length,nil,DISPATCH_DATA_DESTRUCTOR_DEFAULT);
-        this->nwsend(this->outbound_connection, data);
-        dispatch_release(data);
-        return length;
+    if (!ENABLE_NETWORKFRAMEWORK) {
+         ssize_t n = send(m_sockfd, buffer, length, 0);
+               if (n != length) {
+                   debug_print("not full send\n");
+               }
+               if (n==-1) {
+                   perror("send error fopen( \"nulltest.txt\", \"r\" )");
+               }
+               return n;
     }else {
-        
-        ssize_t n = send(m_sockfd, buffer, length, 0);
-        if (n != length) {
-            debug_print("not full send\n");
+        if (__builtin_available(iOS 12,macOS 10.14, *) ) {
+            //send error check
+            dispatch_data_t data =  dispatch_data_create(buffer,length,nil,DISPATCH_DATA_DESTRUCTOR_DEFAULT);
+            this->nwsend(this->outbound_connection, data);
+            dispatch_release(data);
+            return length;
         }
-        if (n==-1) {
-            perror("send error fopen( \"nulltest.txt\", \"r\" )");
-        }
-        return n;
     }
+    
+    
     
     
 }
@@ -539,28 +542,15 @@ UDPSession::create_outbound_connection(const char *name, const char *port)
 {
     // If we are using bonjour to connect, treat the name as a bonjour name
     // Otherwise, treat the name as a hostname
-    if (AT_AVAILABLE(iOS 12,macOS 10.14, *)&& ENABLE_NETWORKFRAMEWORK) {
+    if (!ENABLE_NETWORKFRAMEWORK) {
+        return nil;
+    }
+    if (__builtin_available(iOS 12,macOS 10.14, *)) {
         nw_endpoint_t endpoint = nw_endpoint_create_host(name, port);
         
         nw_parameters_t parameters = NULL;
         nw_parameters_configure_protocol_block_t configure_tls = NW_PARAMETERS_DISABLE_PROTOCOL;
-        if (g_use_tls) {
-            if (g_psk) {
-                configure_tls = ^(nw_protocol_options_t tls_options) {
-                    sec_protocol_options_t sec_options = nw_tls_copy_sec_protocol_options(tls_options);
-                    dispatch_data_t psk = dispatch_data_create(g_psk, strlen(g_psk), nil, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
-                    sec_protocol_options_add_pre_shared_key(sec_options, psk, psk);
-                    dispatch_release(psk);
-#if !TARGET_OS_UIKITFORMAC
-                    sec_protocol_options_add_tls_ciphersuite(sec_options, (SSLCipherSuite)TLS_PSK_WITH_AES_128_GCM_SHA256);
-#endif
 
-                    nw_release(sec_options);
-                };
-            } else {
-                configure_tls = NW_PARAMETERS_DEFAULT_CONFIGURATION;
-            }
-        }
         
         if (g_use_udp) {
             // Create a UDP connection
@@ -606,7 +596,10 @@ UDPSession::create_outbound_connection(const char *name, const char *port)
 }
 void UDPSession::start_connection(nw_connection_t connection,dispatch_queue_t kcptunqueue)
 {
-     if (AT_AVAILABLE(iOS 12, macOS 10.14,*)&& ENABLE_NETWORKFRAMEWORK) {
+    if(!ENABLE_NETWORKFRAMEWORK) {
+        return;
+    }
+     if (__builtin_available(iOS 12, macOS 10.14,*)) {
          //set callback queue
          nw_connection_set_queue(connection,kcptunqueue);
          dispatchQueue = kcptunqueue;
@@ -692,10 +685,13 @@ void
 UDPSession::receive_loop()
 {
  
+    if (!ENABLE_NETWORKFRAMEWORK) {
+        return;
+    }
     
     nw_connection_t connection = this->outbound_connection;
     debug_print("nw start recvloop\n");
-    if (AT_AVAILABLE(iOS 12, macOS 10.14,*)&& ENABLE_NETWORKFRAMEWORK) {
+    if (__builtin_available(iOS 12, macOS 10.14,*)) {
         nw_connection_receive(connection, 1, UINT32_MAX, ^(dispatch_data_t content, nw_content_context_t context, bool is_complete, nw_error_t receive_error) {
             if (content == NULL){
                 //socket failure
@@ -845,16 +841,20 @@ UDPSession::nwsend(nw_connection_t connection, dispatch_data_t _Nonnull write_da
     // Every send is marked as complete. This has no effect with the default message context for TCP,
     // but is required for UDP to indicate the end of a packet.
     debug_print("nw send data!\n");
-    if (AT_AVAILABLE(iOS 12,macOS 10.14, *)&& ENABLE_NETWORKFRAMEWORK) {
-        nw_connection_send(connection, write_data, NW_CONNECTION_DEFAULT_MESSAGE_CONTEXT, true, ^(nw_error_t  _Nullable error) {
-            if (error != NULL) {
-                errno = nw_error_get_error_code(error);
-                warn("send error %d",errno);
-            } else {
-                //send_loop(connection);
-                debug_print("send fin\n");
-            }
-        });
+    if (ENABLE_NETWORKFRAMEWORK) {
+        if (__builtin_available(iOS 12.0, macOS 10.14,*)) {
+            nw_connection_send(connection, write_data, NW_CONNECTION_DEFAULT_MESSAGE_CONTEXT, true, ^(nw_error_t  _Nullable error) {
+                if (error != NULL) {
+                    errno = nw_error_get_error_code(error);
+                    warn("send error %d",errno);
+                } else {
+                    //send_loop(connection);
+                    debug_print("send fin\n");
+                }
+            });
+        } else {
+            // Fallback on earlier versions
+        }
     }
     
 }

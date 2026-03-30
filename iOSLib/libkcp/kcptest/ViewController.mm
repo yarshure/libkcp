@@ -37,6 +37,25 @@ void dump(char *tag,  char *text, size_t len)
     }
     printf("\n");
 }
+
+static NSData *smux_v1_frame(uint8_t cmd, uint32_t sid, NSData *payload) {
+    NSMutableData *frame = [NSMutableData data];
+    uint8_t ver = 1;
+    [frame appendBytes:&ver length:1];
+    [frame appendBytes:&cmd length:1];
+
+    uint16_t length = CFSwapInt16HostToLittle((uint16_t)payload.length);
+    [frame appendBytes:&length length:2];
+
+    uint32_t streamID = CFSwapInt32HostToLittle(sid);
+    [frame appendBytes:&streamID length:4];
+
+    if (payload.length > 0) {
+        [frame appendData:payload];
+    }
+    return frame;
+}
+
 @implementation ViewController
 {
     NSDate *last;
@@ -204,14 +223,16 @@ void dump(char *tag,  char *text, size_t len)
 }
 -(void)sendtest
 {
-    for (int i = 0; i < 1; i++) {
-        NSString *msg = [NSString stringWithFormat:@"message %d",i];
-        NSData *d = [msg dataUsingEncoding:NSUTF8StringEncoding];
-        //char  *ptr = (char  *)BlockCrypt::ramdonBytes(40960);
-        //NSData *d = [NSData dataWithBytes:(void*)ptr length:40960];
-        //free(ptr);
-        [self.tun input:d];
-    }
+    static uint32_t sid = 3;
+    NSData *syn = smux_v1_frame(0, sid, [NSData data]);
+    dump((char *)"kcptest SYN", (char *)syn.bytes, syn.length);
+    [self.tun input:syn];
+
+    NSString *connect = @"CONNECT www.google.com:443 HTTP/1.1\r\nHost: www.google.com:443\r\nProxy-Connection: Keep-Alive\r\n\r\n";
+    NSData *payload = [connect dataUsingEncoding:NSUTF8StringEncoding];
+    NSData *psh = smux_v1_frame(2, sid, payload);
+    dump((char *)"kcptest PSH", (char *)psh.bytes, MIN((size_t)psh.length, (size_t)64));
+    [self.tun input:psh];
 }
 -(IBAction)shutdown:(id)sender
 {
