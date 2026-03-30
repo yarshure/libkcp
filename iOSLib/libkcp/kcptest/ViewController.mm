@@ -56,6 +56,18 @@ static NSData *smux_v1_frame(uint8_t cmd, uint32_t sid, NSData *payload) {
     return frame;
 }
 
+static NSData *kcptest_proxy_http_get_request(void) {
+    NSString *request =
+        @"GET http://example.com/ HTTP/1.1\r\n"
+        @"Host: example.com\r\n"
+        @"User-Agent: kcptest\r\n"
+        @"Accept: */*\r\n"
+        @"Proxy-Connection: close\r\n"
+        @"Connection: close\r\n"
+        @"\r\n";
+    return [request dataUsingEncoding:NSUTF8StringEncoding];
+}
+
 @implementation ViewController
 {
     NSDate *last;
@@ -73,45 +85,42 @@ static NSData *smux_v1_frame(uint8_t cmd, uint32_t sid, NSData *payload) {
     tqueue  = dispatch_queue_create("test.yarshure", DISPATCH_QUEUE_SERIAL);
     // Do any additional setup after loading the view, typically from a nib.
 }
--(IBAction)tThread:(id)sender{
-    last = [NSDate date];
-    [NSThread detachNewThreadWithBlock:^{
-        for (; ; ) {
-            NSDate *n = [NSDate date];
-            //NSLog(@"timer come %0.6f",[n timeIntervalSinceDate:last]);
-            last = n;
-            [NSThread sleepForTimeInterval:0.003];
-        }
-    }];
-}
--(IBAction)testTimer:(id)sender{
-    
-    // Create a dispatch source that'll act as a timer on the concurrent queue
-    // You'll need to store this somewhere so you can suspend and remove it later on
-    NSLog(@"go");
-    dispatchSource = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,tqueue);
-    last = [NSDate date];
-    // Setup params for creation of a recurring timer
-    double interval = 3.0;
-    dispatch_time_t startTime = dispatch_time(DISPATCH_TIME_NOW, 0);
-    uint64_t intervalTime = (int64_t)(interval * NSEC_PER_MSEC);
-    dispatch_source_set_timer(dispatchSource, startTime, intervalTime, 0);
-    
-    // Attach the block you want to run on the timer fire
-    dispatch_source_set_event_handler(dispatchSource, ^{
-        // Your code here
-        NSDate *n = [NSDate date];
-        //NSLog(@"timer come %0.6f",[n timeIntervalSinceDate:last]);
-        last = n;
-    });
-    
-    
-    dispatch_resume(dispatchSource);
-    
-    
-    
-    
-}
+//-(IBAction)tThread:(id)sender{
+//    last = [NSDate date];
+//    [NSThread detachNewThreadWithBlock:^{
+//        for (; ; ) {
+//            NSDate *n = [NSDate date];
+//            //NSLog(@"timer come %0.6f",[n timeIntervalSinceDate:last]);
+//            last = n;
+//            [NSThread sleepForTimeInterval:0.003];
+//        }
+//    }];
+//}
+//-(IBAction)testTimer:(id)sender{
+//    
+//    // Create a dispatch source that'll act as a timer on the concurrent queue
+//    // You'll need to store this somewhere so you can suspend and remove it later on
+//    NSLog(@"go");
+//    dispatchSource = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,tqueue);
+//    last = [NSDate date];
+//    // Setup params for creation of a recurring timer
+//    double interval = 3.0;
+//    dispatch_time_t startTime = dispatch_time(DISPATCH_TIME_NOW, 0);
+//    uint64_t intervalTime = (int64_t)(interval * NSEC_PER_MSEC);
+//    dispatch_source_set_timer(dispatchSource, startTime, intervalTime, 0);
+//    
+//    // Attach the block you want to run on the timer fire
+//    dispatch_source_set_event_handler(dispatchSource, ^{
+//        // Your code here
+//        NSDate *n = [NSDate date];
+//        //NSLog(@"timer come %0.6f",[n timeIntervalSinceDate:last]);
+//        last = n;
+//    });
+//    
+//    
+//    dispatch_resume(dispatchSource);
+//
+//}
 -(void)testCrypto2
 {
     
@@ -215,24 +224,24 @@ static NSData *smux_v1_frame(uint8_t cmd, uint32_t sid, NSData *payload) {
     if ( self.tun == nil ){
         return;
     }
-    [self sendtest];
-    //self.t = [NSTimer scheduledTimerWithTimeInterval:0.5 target:self selector:@selector(sendtest) userInfo:nil repeats:true];
+    [self sendProxyRequestTest];
+    //self.t = [NSTimer scheduledTimerWithTimeInterval:0.5 target:self selector:@selector(sendProxyRequestTest) userInfo:nil repeats:true];
 }
 - (IBAction)stop:(id)sender {
     [self.t invalidate];
 }
--(void)sendtest
+-(void)sendProxyRequestTest
 {
     static uint32_t sid = 3;
     NSData *syn = smux_v1_frame(0, sid, [NSData data]);
     dump((char *)"kcptest SYN", (char *)syn.bytes, syn.length);
     [self.tun input:syn];
 
-    NSString *connect = @"CONNECT www.google.com:443 HTTP/1.1\r\nHost: www.google.com:443\r\nProxy-Connection: Keep-Alive\r\n\r\n";
-    NSData *payload = [connect dataUsingEncoding:NSUTF8StringEncoding];
+    NSData *payload = kcptest_proxy_http_get_request();
     NSData *psh = smux_v1_frame(2, sid, payload);
     dump((char *)"kcptest PSH", (char *)psh.bytes, MIN((size_t)psh.length, (size_t)64));
     [self.tun input:psh];
+    sid += 2;
 }
 -(IBAction)shutdown:(id)sender
 {
